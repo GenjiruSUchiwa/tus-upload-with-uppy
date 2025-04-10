@@ -31,6 +31,67 @@ const ImageUploader = () => {
         return URL.createObjectURL(file);
     };
 
+    // Composant pour le progress circle
+    const CircularProgress = ({ percentage }) => {
+        const radius = 15;
+        const circumference = 2 * Math.PI * radius;
+        const strokeDashoffset = circumference - (percentage / 100) * circumference;
+
+        return (
+            <svg className="w-10 h-10" viewBox="0 0 36 36">
+                <circle
+                    cx="18"
+                    cy="18"
+                    r={radius}
+                    fill="transparent"
+                    stroke="#e6e6e6"
+                    strokeWidth="3"
+                />
+                <circle
+                    cx="18"
+                    cy="18"
+                    r={radius}
+                    fill="transparent"
+                    stroke="#3b82f6"
+                    strokeWidth="3"
+                    strokeDasharray={circumference}
+                    strokeDashoffset={strokeDashoffset}
+                    strokeLinecap="round"
+                    transform="rotate(-90 18 18)"
+                />
+                <text
+                    x="18"
+                    y="18"
+                    textAnchor="middle"
+                    dominantBaseline="middle"
+                    fill="#ffffff"
+                    fontSize="8"
+                    fontWeight="bold"
+                >
+                    {percentage}%
+                </text>
+            </svg>
+        );
+    };
+
+    // Composant pour l'icône de succès
+    const SuccessIcon = () => (
+        <div className="rounded-full bg-green-500 p-1 w-6 h-6 flex items-center justify-center">
+            <svg className="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" />
+            </svg>
+        </div>
+    );
+
+    // Composant pour l'icône d'échec
+    const FailIcon = () => (
+        <div className="rounded-full bg-red-500 p-1 w-6 h-6 flex items-center justify-center">
+            <svg className="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+        </div>
+    );
+
     // Initialisation d'Uppy - une seule fois au montage du composant
     useEffect(() => {
         // Initialiser Uppy seulement s'il n'existe pas encore
@@ -56,6 +117,7 @@ const ImageUploader = () => {
                     const { bytesUploaded, bytesTotal } = progress;
                     const percentage = Math.floor((bytesUploaded / bytesTotal) * 100);
 
+                    // Mettre à jour les infos de progression
                     setProgressInfo(prev => ({
                         ...prev,
                         [file.id]: {
@@ -93,6 +155,7 @@ const ImageUploader = () => {
                                 storageUrl: storageUrl,    // URL réelle pour le stockage/téléchargement
                                 isTiff: fileIsTiff,
                                 index,
+                                uploadSuccess: true,       // Marquer comme réussi
                             },
                         ];
                     });
@@ -288,6 +351,7 @@ const ImageUploader = () => {
                                 // Trouver les informations de progression pour ce fichier
                                 const progress = progressInfo[image.id] || null;
                                 const isUploading = progress && progress.progress < 100;
+                                const showProgressCircle = image.isPending && !image.uploadFailed;
 
                                 return (
                                     <Draggable
@@ -324,25 +388,24 @@ const ImageUploader = () => {
                                                         </div>
                                                     )}
 
-                                                    {image.isPending && !isUploading && !image.uploadFailed && (
-                                                        <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 text-white">
-                                                            Pending
+                                                    {/* Affichage progress circle */}
+                                                    {showProgressCircle && (
+                                                        <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-30">
+                                                            <CircularProgress percentage={progress?.progress || 0} />
                                                         </div>
                                                     )}
+
+                                                    {/* Icône de succès pour les uploads terminés */}
+                                                    {image.uploadSuccess && (
+                                                        <div className="absolute bottom-2 right-2">
+                                                            <SuccessIcon />
+                                                        </div>
+                                                    )}
+
+                                                    {/* Icône d'échec pour les uploads échoués */}
                                                     {image.uploadFailed && (
-                                                        <div className="absolute inset-0 flex items-center justify-center bg-red-500 bg-opacity-50 text-white">
-                                                            Failed
-                                                        </div>
-                                                    )}
-                                                    {isUploading && (
-                                                        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black bg-opacity-50 text-white">
-                                                            <div className="text-xs mb-1">{progress?.progress || 0}%</div>
-                                                            <div className="w-4/5 h-1.5 bg-gray-200 rounded-full overflow-hidden">
-                                                                <div
-                                                                    className="h-full bg-blue-500 rounded-full"
-                                                                    style={{ width: `${progress?.progress || 0}%` }}
-                                                                />
-                                                            </div>
+                                                        <div className="absolute bottom-2 right-2">
+                                                            <FailIcon />
                                                         </div>
                                                     )}
                                                 </div>
