@@ -10,6 +10,13 @@ const ImageUploader = () => {
     const [progressInfo, setProgressInfo] = useState({});
     const fileInputRef = useRef(null);
     const uppyRef = useRef(null);
+    const uppyFileIdsMapRef = useRef({}); // Pour mapper les IDs pendingFile aux IDs Uppy
+
+    // Référence pour suivre les temps minimums d'affichage de progression
+    const progressTimersRef = useRef({});
+
+    // Temps minimum pour afficher la progression (en ms)
+    const MIN_PROGRESS_DISPLAY_TIME = 1000;
 
     // Chemin vers l'image de preview TIFF statique
     const TIFF_PREVIEW_PATH = "/tif-preview.png";
@@ -92,6 +99,51 @@ const ImageUploader = () => {
         </div>
     );
 
+    // Fonction pour finaliser l'upload après le délai minimum si nécessaire
+    const finalizeUpload = (file, response, pendingId, fileIsTiff, storageUrl, displayUrl) => {
+        // Définir l'index par défaut à la longueur du tableau images
+        const matchingPendingFile = pendingFiles.find(pf => pf.id === pendingId);
+        const index = matchingPendingFile ? matchingPendingFile.index : images.length;
+
+        // Ajouter l'image à la liste des images téléchargées avec succès
+        setImages((prevImages) => [
+            ...prevImages,
+            {
+                id: file.id,
+                name: file.name,
+                url: displayUrl,           // URL pour l'affichage (preview)
+                storageUrl: storageUrl,    // URL réelle pour le stockage/téléchargement
+                isTiff: fileIsTiff,
+                index,
+                uploadSuccess: true,       // Marquer comme réussi
+            },
+        ]);
+
+        // Supprimer le fichier en attente correspondant
+        if (pendingId) {
+            setPendingFiles(prev => prev.filter(pf => pf.id !== pendingId));
+        }
+
+        // Nettoyer les infos de progression
+        setProgressInfo(prev => {
+            const newProgress = {...prev};
+            if (pendingId) {
+                delete newProgress[pendingId];
+            }
+            return newProgress;
+        });
+
+        // Nettoyer le mappage et le timer
+        delete uppyFileIdsMapRef.current[file.id];
+        delete progressTimersRef.current[pendingId];
+
+        // Vérifier si c'était le dernier fichier en cours d'upload
+        const remainingUploads = Object.keys(uppyFileIdsMapRef.current).length;
+        if (remainingUploads === 0) {
+            setIsUploading(false);
+        }
+    };
+
     // Initialisation d'Uppy - une seule fois au montage du composant
     useEffect(() => {
         // Initialiser Uppy seulement s'il n'existe pas encore
@@ -108,28 +160,57 @@ const ImageUploader = () => {
                 .use(Tus, {
                     endpoint: "https://tusd.tusdemo.net/files/", // Remplacer par votre endpoint tus
                     retryDelays: [0, 1000, 3000, 5000],
-                    chunkSize: 2 * 1024 * 1024,
+                    chunkSize: 1 * 1024 * 1024,
                 });
 
             // Configuration des événements Uppy une seule fois
             uppyRef.current
+                .on('file-added', (file) => {
+                    // Stocker la relation entre l'ID Uppy et l'ID pendingFile
+                    const pendingId = file.meta.pendingId;
+                    if (pendingId) {
+                        uppyFileIdsMapRef.current[file.id] = pendingId;
+
+                        // Initialiser la progression à 0 pour assurer l'affichage du cercle de progression
+                        setProgressInfo(prev => ({
+                            ...prev,
+                            [pendingId]: {
+                                progress: 0,
+                                bytesUploaded: 0,
+                                bytesTotal: file.size,
+                                uppyFileId: file.id,
+                                startTime: Date.now()
+                            }
+                        }));
+                    }
+                })
                 .on('upload-progress', (file, progress) => {
                     const { bytesUploaded, bytesTotal } = progress;
                     const percentage = Math.floor((bytesUploaded / bytesTotal) * 100);
 
-                    // Mettre à jour les infos de progression
-                    setProgressInfo(prev => ({
-                        ...prev,
-                        [file.id]: {
-                            progress: percentage,
-                            bytesUploaded,
-                            bytesTotal
-                        }
-                    }));
+                    // Trouver l'ID du fichier en attente correspondant
+                    const pendingId = uppyFileIdsMapRef.current[file.id];
+
+                    if (pendingId) {
+                        // Mettre à jour les infos de progression
+                        setProgressInfo(prev => {
+                            const currentInfo = prev[pendingId] || {};
+                            return {
+                                ...prev,
+                                [pendingId]: {
+                                    ...currentInfo,
+                                    progress: percentage,
+                                    bytesUploaded,
+                                    bytesTotal,
+                                    uppyFileId: file.id
+                                }
+                            };
+                        });
+                    }
                 })
                 .on("upload-success", (file, response) => {
                     // Vérifier si c'est un fichier TIFF
-                    const fileIsTiff = isTiffFile(file);
+                    const fileIsTiff = isTiffFile(file.data);
 
                     // URL de stockage (URL réelle du fichier téléchargé)
                     const storageUrl = response.uploadURL || URL.createObjectURL(file.data);
@@ -137,68 +218,87 @@ const ImageUploader = () => {
                     // URL d'affichage (preview)
                     const displayUrl = fileIsTiff ? TIFF_PREVIEW_PATH : storageUrl;
 
-                    setImages((prevImages) => {
-                        // Trouver l'index correspondant au fichier en attente pour préserver l'ordre
-                        const matchingPendingFile = pendingFiles.find(pf =>
-                            pf.name === file.name &&
-                            pf.file.size === file.data.size
-                        );
+                    // Trouver l'ID du fichier en attente correspondant
+                    const pendingId = uppyFileIdsMapRef.current[file.id];
 
-                        const index = matchingPendingFile ? matchingPendingFile.index : prevImages.length;
+                    if (pendingId) {
+                        // Vérifier si le temps minimal d'affichage de la progression est écoulé
+                        const progressInfo = progressTimersRef.current[pendingId] || {};
+                        const startTime = progressInfo.startTime || 0;
+                        const elapsedTime = Date.now() - startTime;
 
-                        return [
-                            ...prevImages,
-                            {
-                                id: file.id,
-                                name: file.name,
-                                url: displayUrl,           // URL pour l'affichage (preview)
-                                storageUrl: storageUrl,    // URL réelle pour le stockage/téléchargement
-                                isTiff: fileIsTiff,
-                                index,
-                                uploadSuccess: true,       // Marquer comme réussi
-                            },
-                        ];
-                    });
+                        if (elapsedTime < MIN_PROGRESS_DISPLAY_TIME) {
+                            // Si l'upload a été trop rapide, attendre un peu avant de finaliser
+                            // S'assurer que la progression affiche 100%
+                            setProgressInfo(prev => ({
+                                ...prev,
+                                [pendingId]: {
+                                    ...prev[pendingId],
+                                    progress: 100
+                                }
+                            }));
 
-                    // Supprimer le fichier en attente correspondant
-                    setPendingFiles(prev =>
-                        prev.filter(pf => !(pf.name === file.name && pf.file.size === file.data.size))
-                    );
+                            // Définir un timer pour finaliser l'upload après le délai minimum
+                            const remainingTime = MIN_PROGRESS_DISPLAY_TIME - elapsedTime;
+                            const timerId = setTimeout(() => {
+                                finalizeUpload(file, response, pendingId, fileIsTiff, storageUrl, displayUrl);
+                            }, remainingTime);
 
-                    // Nettoyer les infos de progression
-                    setProgressInfo(prev => {
-                        const newProgress = {...prev};
-                        delete newProgress[file.id];
-                        return newProgress;
-                    });
+                            // Stocker le timer ID pour pouvoir le nettoyer si nécessaire
+                            progressTimersRef.current[pendingId] = {
+                                ...progressTimersRef.current[pendingId],
+                                timerId
+                            };
+                        } else {
+                            // Si suffisamment de temps s'est écoulé, finaliser immédiatement
+                            finalizeUpload(file, response, pendingId, fileIsTiff, storageUrl, displayUrl);
+                        }
+                    } else {
+                        // Si pas de pendingId (cas rare), finaliser directement
+                        finalizeUpload(file, response, null, fileIsTiff, storageUrl, displayUrl);
+                    }
                 })
                 .on("upload-error", (file, error) => {
                     console.error("Upload error:", error);
-                    setIsUploading(false);
+
+                    // Trouver l'ID du fichier en attente correspondant
+                    const pendingId = uppyFileIdsMapRef.current[file.id];
 
                     // Marquer le fichier comme ayant échoué
-                    setPendingFiles(prev => prev.map(pf => {
-                        if (pf.name === file.name) {
-                            return {...pf, uploadFailed: true};
-                        }
-                        return pf;
-                    }));
+                    if (pendingId) {
+                        setPendingFiles(prev => prev.map(pf => {
+                            if (pf.id === pendingId) {
+                                return {...pf, uploadFailed: true};
+                            }
+                            return pf;
+                        }));
 
-                    // Nettoyer les infos de progression
-                    setProgressInfo(prev => {
-                        const newProgress = {...prev};
-                        delete newProgress[file.id];
-                        return newProgress;
-                    });
-                })
-                .on("complete", (result) => {
-                    if (result.failed.length === 0 && result.successful.length > 0) {
-                        // Tous les uploads ont réussi
-                        setIsUploading(false);
-                    } else if (result.failed.length > 0) {
-                        // Certains uploads ont échoué
+                        // Nettoyer les infos de progression
+                        setProgressInfo(prev => {
+                            const newProgress = {...prev};
+                            delete newProgress[pendingId];
+                            return newProgress;
+                        });
+
+                        // Nettoyer le timer si existant
+                        if (progressTimersRef.current[pendingId]?.timerId) {
+                            clearTimeout(progressTimersRef.current[pendingId].timerId);
+                            delete progressTimersRef.current[pendingId];
+                        }
+                    }
+
+                    // Nettoyer le mappage
+                    delete uppyFileIdsMapRef.current[file.id];
+
+                    // Vérifier s'il reste des uploads en cours
+                    const remainingUploads = Object.keys(uppyFileIdsMapRef.current).length;
+                    if (remainingUploads === 0) {
                         setIsUploading(false);
                     }
+                })
+                .on("complete", (result) => {
+                    // La gestion du statut d'upload est maintenant déléguée aux handlers individuels
+                    // pour une meilleure gestion des délais d'affichage
                 });
         }
 
@@ -215,6 +315,17 @@ const ImageUploader = () => {
                     URL.revokeObjectURL(file.url);
                 }
             });
+
+            // Nettoyer tous les timers en cours
+            Object.values(progressTimersRef.current).forEach(info => {
+                if (info.timerId) {
+                    clearTimeout(info.timerId);
+                }
+            });
+
+            // Réinitialiser les références
+            uppyFileIdsMapRef.current = {};
+            progressTimersRef.current = {};
         };
     }, []); // Dépendance vide - s'exécute uniquement au montage et au démontage
 
@@ -237,6 +348,11 @@ const ImageUploader = () => {
 
                 // Obtenir l'URL de preview appropriée selon le type de fichier
                 const previewUrl = getPreviewUrl(file);
+
+                // Enregistrer l'heure de début pour mesurer la durée d'affichage minimale
+                progressTimersRef.current[id] = {
+                    startTime: Date.now()
+                };
 
                 return {
                     id: id,
@@ -276,6 +392,17 @@ const ImageUploader = () => {
                             }
                             return pf;
                         }));
+
+                        // Nettoyer le timer si existant
+                        if (progressTimersRef.current[pendingFile.id]) {
+                            delete progressTimersRef.current[pendingFile.id];
+                        }
+
+                        // Vérifier s'il reste des uploads en cours
+                        const remainingPendingFiles = prev.filter(pf => !pf.uploadFailed).length - 1;
+                        if (remainingPendingFiles <= 0) {
+                            setIsUploading(false);
+                        }
                     }
                 });
             }, 0);
@@ -349,8 +476,7 @@ const ImageUploader = () => {
                         >
                             {allImages.map((image, index) => {
                                 // Trouver les informations de progression pour ce fichier
-                                const progress = progressInfo[image.id] || null;
-                                const isUploading = progress && progress.progress < 100;
+                                const progress = progressInfo[image.id] || { progress: 0 };
                                 const showProgressCircle = image.isPending && !image.uploadFailed;
 
                                 return (
@@ -358,7 +484,7 @@ const ImageUploader = () => {
                                         key={String(image.id)}
                                         draggableId={String(image.id)}
                                         index={index}
-                                        isDragDisabled={isUploading}
+                                        isDragDisabled={showProgressCircle}
                                         disableInteractiveElementBlocking={true}
                                     >
                                         {(provided, snapshot) => (
@@ -391,7 +517,7 @@ const ImageUploader = () => {
                                                     {/* Affichage progress circle */}
                                                     {showProgressCircle && (
                                                         <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-30">
-                                                            <CircularProgress percentage={progress?.progress || 0} />
+                                                            <CircularProgress percentage={progress.progress || 0} />
                                                         </div>
                                                     )}
 
@@ -424,6 +550,11 @@ const ImageUploader = () => {
             </DragDropContext>
         );
     };
+
+    // Debug pour voir la progression en console
+    useEffect(() => {
+        console.log("Progression des uploads:", progressInfo);
+    }, [progressInfo]);
 
     return (
         <div className="bg-white rounded-lg shadow-lg w-[90%] max-w-[900px] mx-auto p-5 relative">
