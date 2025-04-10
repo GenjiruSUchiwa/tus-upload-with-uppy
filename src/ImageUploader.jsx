@@ -28,21 +28,37 @@ const ImageUploader = () => {
             .on("upload-success", (file, response) => {
                 const imageUrl = response.uploadURL || URL.createObjectURL(file.data);
 
+                // Trouver l'index correspondant au fichier en attente pour préserver l'ordre
+                const matchingPendingFile = pendingFiles.find(pf =>
+                    pf.name === file.name &&
+                    pf.file.size === file.data.size
+                );
+
+                const index = matchingPendingFile ? matchingPendingFile.index : images.length;
+
                 setImages((prevImages) => [
                     ...prevImages,
                     {
                         id: file.id,
                         name: file.name,
                         url: imageUrl,
-                        index: prevImages.length,
+                        index,
                     },
                 ]);
+
+                // Supprimer le fichier en attente correspondant
+                if (matchingPendingFile) {
+                    setPendingFiles(prev =>
+                        prev.filter(pf => pf.id !== matchingPendingFile.id)
+                    );
+                }
             })
             .on("upload-error", (file, error) => {
                 console.error("Upload error:", error);
                 setIsUploading(false);
             })
             .on("complete", () => {
+                console.log("Complete");
                 setIsUploading(false);
                 setPendingFiles([]);
             });
@@ -52,7 +68,7 @@ const ImageUploader = () => {
                 uppyRef.current.destroy();
             }
         };
-    }, []);
+    }, [pendingFiles]);
 
     const handleUploadClick = () => {
         fileInputRef.current.click();
@@ -68,6 +84,7 @@ const ImageUploader = () => {
                 url: URL.createObjectURL(file),
                 file: file,
                 isPending: true,
+                index: pendingFiles.length + images.length,
             }));
 
             setPendingFiles(prevPendingFiles => [...prevPendingFiles, ...newPendingFiles]);
@@ -108,6 +125,10 @@ const ImageUploader = () => {
                     name: pendingFile.name,
                     type: pendingFile.file.type,
                     data: pendingFile.file,
+                    meta: {
+                        pendingId: pendingFile.id, // Stocker l'ID du fichier en attente pour le retrouver
+                        index: pendingFile.index   // Préserver l'index pour l'ordre
+                    }
                 });
             });
 
@@ -123,13 +144,16 @@ const ImageUploader = () => {
     // Fonction pour rendre la grille d'images
     const renderImageGrid = () => {
         // Combiner les images déjà téléchargées et celles en attente
-        const allImages = [...images, ...pendingFiles];
+        const allImages = [...pendingFiles];
+
+        // Trier par index pour maintenir l'ordre
+        allImages.sort((a, b) => a.index - b.index);
 
         // Si aucune image, ne pas rendre le système de drag and drop
         if (allImages.length === 0) {
             return (
                 <div className="empty-state">
-                    <p>No images selected yet. Select some images to begin.</p>
+                    <p className="text-gray-600 text-center">No images selected yet. Select some images to begin.</p>
                 </div>
             );
         }
@@ -146,7 +170,7 @@ const ImageUploader = () => {
                 >
                     {(provided, snapshot) => (
                         <div
-                            className={`images-grid ${snapshot.isDraggingOver ? 'dragging-over' : ''}`}
+                            className={`grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-7 gap-4 mb-8 max-h-[500px] overflow-y-auto p-1 ${snapshot.isDraggingOver ? 'bg-blue-50' : ''}`}
                             {...provided.droppableProps}
                             ref={provided.innerRef}
                         >
@@ -160,7 +184,7 @@ const ImageUploader = () => {
                                 >
                                     {(provided, snapshot) => (
                                         <div
-                                            className={`image-item ${snapshot.isDragging ? 'dragging' : ''}`}
+                                            className={`relative rounded-lg overflow-hidden bg-gray-100 shadow cursor-grab flex flex-col ${snapshot.isDragging ? 'shadow-md' : 'shadow-sm'}`}
                                             ref={provided.innerRef}
                                             {...provided.draggableProps}
                                             {...provided.dragHandleProps}
@@ -168,14 +192,20 @@ const ImageUploader = () => {
                                                 ...provided.draggableProps.style
                                             }}
                                         >
-                                            <div className="image-number">{String(index + 1).padStart(2, '0')}</div>
-                                            <div className="image-container">
-                                                <img src={image.url} alt={image.name} />
-                                                {image.isPending && (
-                                                    <div className="pending-overlay">Pending</div>
-                                                )}
+                                            <div className="absolute top-1 left-1 bg-black bg-opacity-60 text-white text-xs font-bold px-1.5 py-0.5 rounded z-10">
+                                                {String(index + 1).padStart(2, '0')}
                                             </div>
-                                            <div className="image-name">{image.name}</div>
+                                            <div className="w-full h-[100px] overflow-hidden">
+                                                <img
+                                                    src={image.url}
+                                                    alt={image.name}
+                                                    className="w-full h-full object-cover"
+                                                />
+
+                                            </div>
+                                            <div className="text-xs text-gray-600 p-1 whitespace-nowrap overflow-hidden text-ellipsis bg-gray-100">
+                                                {image.name}
+                                            </div>
                                         </div>
                                     )}
                                 </Draggable>
@@ -189,30 +219,30 @@ const ImageUploader = () => {
     };
 
     return (
-        <div className="image-uploader-modal">
-            <div className="image-uploader-header">
-                <h2>Upload images</h2>
-                <button className="close-button">×</button>
+        <div className="bg-white rounded-lg shadow-lg w-[90%] max-w-[900px] mx-auto p-5 relative">
+            <div className="flex justify-between items-center mb-5">
+                <h2 className="text-xl font-medium m-0 text-gray-800">Upload images</h2>
+                <button className="bg-transparent border-0 text-2xl cursor-pointer text-gray-400">&times;</button>
             </div>
 
-            <p className="instruction-text">
+            <p className="text-gray-600 mb-5 text-sm">
                 Please make sure your images are correctly ordered according to your experiment setup
             </p>
 
             {/* Rendu de la grille d'images */}
             {renderImageGrid()}
 
-            <div className="upload-actions">
+            <div className="flex justify-center mb-5">
                 <input
                     type="file"
                     ref={fileInputRef}
-                    style={{ display: "none" }}
+                    className="hidden"
                     onChange={handleFileChange}
                     multiple
                     accept="image/*"
                 />
                 <button
-                    className="upload-more-button"
+                    className="flex items-center justify-center bg-white border border-gray-300 rounded px-4 py-2 text-sm text-gray-700 cursor-pointer transition hover:bg-gray-100 disabled:bg-gray-100 disabled:text-gray-500 disabled:cursor-not-allowed before:content-['↑'] before:mr-2"
                     onClick={handleUploadClick}
                     disabled={isUploading}
                 >
@@ -221,7 +251,7 @@ const ImageUploader = () => {
             </div>
 
             <button
-                className="create-experiment-button"
+                className="block w-full bg-blue-500 text-white border-0 rounded py-3 text-base font-medium cursor-pointer transition hover:bg-blue-600 disabled:bg-blue-300 disabled:cursor-not-allowed"
                 onClick={handleCreateExperiment}
                 disabled={(images.length === 0 && pendingFiles.length === 0) || isUploading}
             >
