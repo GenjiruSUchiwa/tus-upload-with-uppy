@@ -10,9 +10,9 @@ const ImageUploader = () => {
     const [progressInfo, setProgressInfo] = useState({});
     const fileInputRef = useRef(null);
     const uppyRef = useRef(null);
-    const uppyFileIdsMapRef = useRef({}); // Pour mapper les IDs pendingFile aux IDs Uppy
-
-    // Référence pour suivre les temps minimums d'affichage de progression
+    const uppyFileIdsMapRef = useRef({}); // Map pour associer pendingId -> uppyFileId
+    const pendingToOriginalNameRef = useRef({}); // Map pour conserver les noms originaux
+    const failedFilesRef = useRef({}); // Pour stocker les fichiers qui ont échoué pour retry
     const progressTimersRef = useRef({});
 
     // Temps minimum pour afficher la progression (en ms)
@@ -31,10 +31,8 @@ const ImageUploader = () => {
     // Fonction pour générer une URL de preview selon le type de fichier
     const getPreviewUrl = (file) => {
         if (isTiffFile(file)) {
-            // Pour les TIFF, utiliser l'image statique
             return TIFF_PREVIEW_PATH;
         }
-        // Pour les autres formats, utiliser l'URL de l'objet
         return URL.createObjectURL(file);
     };
 
@@ -99,79 +97,49 @@ const ImageUploader = () => {
         </div>
     );
 
-    // Fonction pour finaliser l'upload après le délai minimum si nécessaire
-    const finalizeUpload = (file, response, pendingId, fileIsTiff, storageUrl, displayUrl) => {
-        // Définir l'index par défaut à la longueur du tableau images
-        const matchingPendingFile = pendingFiles.find(pf => pf.id === pendingId);
-        const index = matchingPendingFile ? matchingPendingFile.index : images.length;
+    // Composant pour le bouton de retry
+    const RetryButton = ({ onClick }) => (
+        <div
+            className="absolute bottom-2 right-2 rounded-full bg-blue-500 p-1 w-8 h-8 flex items-center justify-center cursor-pointer hover:bg-blue-600 transition-colors z-20"
+            onClick={onClick}
+        >
+            <svg className="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+        </div>
+    );
 
-        // Ajouter l'image à la liste des images téléchargées avec succès
-        setImages((prevImages) => [
-            ...prevImages,
-            {
-                id: file.id,
-                name: file.name,
-                url: displayUrl,           // URL pour l'affichage (preview)
-                storageUrl: storageUrl,    // URL réelle pour le stockage/téléchargement
-                isTiff: fileIsTiff,
-                index,
-                uploadSuccess: true,       // Marquer comme réussi
-            },
-        ]);
-
-        // Supprimer le fichier en attente correspondant
-        if (pendingId) {
-            setPendingFiles(prev => prev.filter(pf => pf.id !== pendingId));
-        }
-
-        // Nettoyer les infos de progression
-        setProgressInfo(prev => {
-            const newProgress = {...prev};
-            if (pendingId) {
-                delete newProgress[pendingId];
-            }
-            return newProgress;
-        });
-
-        // Nettoyer le mappage et le timer
-        delete uppyFileIdsMapRef.current[file.id];
-        delete progressTimersRef.current[pendingId];
-
-        // Vérifier si c'était le dernier fichier en cours d'upload
-        const remainingUploads = Object.keys(uppyFileIdsMapRef.current).length;
-        if (remainingUploads === 0) {
-            setIsUploading(false);
-        }
-    };
-
-    // Initialisation d'Uppy - une seule fois au montage du composant
+    // Initialisation d'Uppy une seule fois au montage du composant
     useEffect(() => {
-        // Initialiser Uppy seulement s'il n'existe pas encore
         if (!uppyRef.current) {
             uppyRef.current = new Uppy({
                 id: "uppy",
                 autoProceed: true,
                 allowMultipleUploadBatches: true,
                 restrictions: {
-                    // Inclure explicitement 'image/tiff' dans les types autorisés
                     allowedFileTypes: ["image/*", ".tif", ".tiff", "image/tiff"],
                 },
             })
                 .use(Tus, {
-                    endpoint: "https://tusd.tusdemo.net/files/", // Remplacer par votre endpoint tus
+                    endpoint: "https://tusd.tusdemo.net/dd/", // À remplacer par votre endpoint tus
                     retryDelays: [0, 1000, 3000, 5000],
                     chunkSize: 1 * 1024 * 1024,
                 });
 
-            // Configuration des événements Uppy une seule fois
+            // Configuration des événements Uppy
             uppyRef.current
                 .on('file-added', (file) => {
-                    // Stocker la relation entre l'ID Uppy et l'ID pendingFile
                     const pendingId = file.meta.pendingId;
                     if (pendingId) {
-                        uppyFileIdsMapRef.current[file.id] = pendingId;
+                        // Stocker la relation pendingId -> uppyFileId
+                        uppyFileIdsMapRef.current[pendingId] = file.id;
 
-                        // Initialiser la progression à 0 pour assurer l'affichage du cercle de progression
+                        // Conserver le nom original pour les fichiers renommés (en cas de retry)
+                        if (file.meta.originalName) {
+                            pendingToOriginalNameRef.current[pendingId] = file.meta.originalName;
+                        }
+
+                        // Initialiser la progression à 0
                         setProgressInfo(prev => ({
                             ...prev,
                             [pendingId]: {
@@ -188,11 +156,12 @@ const ImageUploader = () => {
                     const { bytesUploaded, bytesTotal } = progress;
                     const percentage = Math.floor((bytesUploaded / bytesTotal) * 100);
 
-                    // Trouver l'ID du fichier en attente correspondant
-                    const pendingId = uppyFileIdsMapRef.current[file.id];
+                    // Trouver le pendingId correspondant au fichier Uppy
+                    const pendingId = Object.keys(uppyFileIdsMapRef.current).find(
+                        key => uppyFileIdsMapRef.current[key] === file.id
+                    );
 
                     if (pendingId) {
-                        // Mettre à jour les infos de progression
                         setProgressInfo(prev => {
                             const currentInfo = prev[pendingId] || {};
                             return {
@@ -209,8 +178,21 @@ const ImageUploader = () => {
                     }
                 })
                 .on("upload-success", (file, response) => {
+                    // Récupérer le nom original si c'est un retry, sinon utiliser le nom du fichier
+                    const pendingId = Object.keys(uppyFileIdsMapRef.current).find(
+                        key => uppyFileIdsMapRef.current[key] === file.id
+                    );
+
+                    if (!pendingId) {
+                        console.warn("Upload-success: Impossible de trouver le pendingId correspondant");
+                        return;
+                    }
+
+                    // Récupérer le nom original pour l'affichage
+                    const originalName = pendingToOriginalNameRef.current[pendingId] || file.name;
+
                     // Vérifier si c'est un fichier TIFF
-                    const fileIsTiff = isTiffFile(file.data);
+                    const fileIsTiff = isTiffFile(file.data) || file.meta.isTiff;
 
                     // URL de stockage (URL réelle du fichier téléchargé)
                     const storageUrl = response.uploadURL || URL.createObjectURL(file.data);
@@ -218,54 +200,56 @@ const ImageUploader = () => {
                     // URL d'affichage (preview)
                     const displayUrl = fileIsTiff ? TIFF_PREVIEW_PATH : storageUrl;
 
-                    // Trouver l'ID du fichier en attente correspondant
-                    const pendingId = uppyFileIdsMapRef.current[file.id];
+                    // Vérifier si le temps minimal d'affichage de la progression est écoulé
+                    const progressInfo = progressTimersRef.current[pendingId] || {};
+                    const startTime = progressInfo.startTime || 0;
+                    const elapsedTime = Date.now() - startTime;
 
-                    if (pendingId) {
-                        // Vérifier si le temps minimal d'affichage de la progression est écoulé
-                        const progressInfo = progressTimersRef.current[pendingId] || {};
-                        const startTime = progressInfo.startTime || 0;
-                        const elapsedTime = Date.now() - startTime;
+                    if (elapsedTime < MIN_PROGRESS_DISPLAY_TIME) {
+                        // Si l'upload a été trop rapide, afficher 100% et attendre un peu
+                        setProgressInfo(prev => ({
+                            ...prev,
+                            [pendingId]: {
+                                ...prev[pendingId],
+                                progress: 100
+                            }
+                        }));
 
-                        if (elapsedTime < MIN_PROGRESS_DISPLAY_TIME) {
-                            // Si l'upload a été trop rapide, attendre un peu avant de finaliser
-                            // S'assurer que la progression affiche 100%
-                            setProgressInfo(prev => ({
-                                ...prev,
-                                [pendingId]: {
-                                    ...prev[pendingId],
-                                    progress: 100
-                                }
-                            }));
+                        // Définir un timer pour finaliser l'upload après le délai minimum
+                        const remainingTime = MIN_PROGRESS_DISPLAY_TIME - elapsedTime;
+                        const timerId = setTimeout(() => {
+                            finalizeUpload(file, response, pendingId, fileIsTiff, storageUrl, displayUrl, originalName);
+                        }, remainingTime);
 
-                            // Définir un timer pour finaliser l'upload après le délai minimum
-                            const remainingTime = MIN_PROGRESS_DISPLAY_TIME - elapsedTime;
-                            const timerId = setTimeout(() => {
-                                finalizeUpload(file, response, pendingId, fileIsTiff, storageUrl, displayUrl);
-                            }, remainingTime);
-
-                            // Stocker le timer ID pour pouvoir le nettoyer si nécessaire
-                            progressTimersRef.current[pendingId] = {
-                                ...progressTimersRef.current[pendingId],
-                                timerId
-                            };
-                        } else {
-                            // Si suffisamment de temps s'est écoulé, finaliser immédiatement
-                            finalizeUpload(file, response, pendingId, fileIsTiff, storageUrl, displayUrl);
-                        }
+                        // Stocker le timer ID pour nettoyage ultérieur si nécessaire
+                        progressTimersRef.current[pendingId] = {
+                            ...progressTimersRef.current[pendingId],
+                            timerId
+                        };
                     } else {
-                        // Si pas de pendingId (cas rare), finaliser directement
-                        finalizeUpload(file, response, null, fileIsTiff, storageUrl, displayUrl);
+                        // Si le temps minimum est déjà écoulé, finaliser immédiatement
+                        finalizeUpload(file, response, pendingId, fileIsTiff, storageUrl, displayUrl, originalName);
                     }
                 })
                 .on("upload-error", (file, error) => {
                     console.error("Upload error:", error);
 
-                    // Trouver l'ID du fichier en attente correspondant
-                    const pendingId = uppyFileIdsMapRef.current[file.id];
+                    // Trouver le pendingId correspondant
+                    const pendingId = Object.keys(uppyFileIdsMapRef.current).find(
+                        key => uppyFileIdsMapRef.current[key] === file.id
+                    );
 
-                    // Marquer le fichier comme ayant échoué
                     if (pendingId) {
+                        // Stocker le fichier d'origine pour retry
+                        failedFilesRef.current[pendingId] = {
+                            file: file.data,
+                            meta: {
+                                ...file.meta,
+                                isTiff: isTiffFile(file.data) || file.meta.isTiff
+                            }
+                        };
+
+                        // Marquer le fichier comme échoué
                         setPendingFiles(prev => prev.map(pf => {
                             if (pf.id === pendingId) {
                                 return {...pf, uploadFailed: true};
@@ -280,43 +264,38 @@ const ImageUploader = () => {
                             return newProgress;
                         });
 
-                        // Nettoyer le timer si existant
+                        // Arrêter le timer si existant
                         if (progressTimersRef.current[pendingId]?.timerId) {
                             clearTimeout(progressTimersRef.current[pendingId].timerId);
                             delete progressTimersRef.current[pendingId];
                         }
-                    }
 
-                    // Nettoyer le mappage
-                    delete uppyFileIdsMapRef.current[file.id];
+                        // Supprimer le mappage pour ce fichier
+                        delete uppyFileIdsMapRef.current[pendingId];
+                    } else {
+                        console.warn("Upload-error: Impossible de trouver le pendingId correspondant");
+                    }
 
                     // Vérifier s'il reste des uploads en cours
-                    const remainingUploads = Object.keys(uppyFileIdsMapRef.current).length;
-                    if (remainingUploads === 0) {
-                        setIsUploading(false);
-                    }
-                })
-                .on("complete", (result) => {
-                    // La gestion du statut d'upload est maintenant déléguée aux handlers individuels
-                    // pour une meilleure gestion des délais d'affichage
+                    checkRemainingUploads();
                 });
         }
 
-        // Nettoyer Uppy et les URL des objets lors du démontage
+        // Nettoyer lors du démontage
         return () => {
             if (uppyRef.current) {
                 uppyRef.current.destroy();
                 uppyRef.current = null;
             }
 
-            // Nettoyer les URL d'objets pour éviter les fuites de mémoire
+            // Nettoyer les URL d'objets
             pendingFiles.forEach(file => {
                 if (file.url && file.url.startsWith('blob:')) {
                     URL.revokeObjectURL(file.url);
                 }
             });
 
-            // Nettoyer tous les timers en cours
+            // Nettoyer les timers
             Object.values(progressTimersRef.current).forEach(info => {
                 if (info.timerId) {
                     clearTimeout(info.timerId);
@@ -325,9 +304,65 @@ const ImageUploader = () => {
 
             // Réinitialiser les références
             uppyFileIdsMapRef.current = {};
+            pendingToOriginalNameRef.current = {};
             progressTimersRef.current = {};
+            failedFilesRef.current = {};
         };
-    }, []); // Dépendance vide - s'exécute uniquement au montage et au démontage
+    }, []);
+
+    // Fonction pour vérifier s'il reste des uploads en cours
+    const checkRemainingUploads = () => {
+        const remainingUploads = Object.keys(uppyFileIdsMapRef.current).length;
+        if (remainingUploads === 0) {
+            setIsUploading(false);
+        }
+    };
+
+    // Fonction pour finaliser l'upload
+    const finalizeUpload = (file, response, pendingId, fileIsTiff, storageUrl, displayUrl, originalName) => {
+        // Définir l'index par défaut à la longueur du tableau images
+        const matchingPendingFile = pendingFiles.find(pf => pf.id === pendingId);
+        const index = matchingPendingFile ? matchingPendingFile.index : images.length;
+
+        // Ajouter l'image à la liste des images téléchargées avec succès
+        setImages((prevImages) => [
+            ...prevImages,
+            {
+                id: pendingId || file.id, // Utiliser pendingId pour maintenir la cohérence
+                name: originalName || file.name,
+                url: displayUrl,
+                storageUrl: storageUrl,
+                isTiff: fileIsTiff,
+                index,
+                uploadSuccess: true,
+            },
+        ]);
+
+        // Supprimer le fichier en attente
+        if (pendingId) {
+            setPendingFiles(prev => prev.filter(pf => pf.id !== pendingId));
+        }
+
+        // Nettoyer les infos de progression
+        setProgressInfo(prev => {
+            const newProgress = {...prev};
+            if (pendingId) {
+                delete newProgress[pendingId];
+            }
+            return newProgress;
+        });
+
+        // Nettoyer les références
+        if (pendingId) {
+            delete uppyFileIdsMapRef.current[pendingId];
+            delete pendingToOriginalNameRef.current[pendingId];
+            delete progressTimersRef.current[pendingId];
+            delete failedFilesRef.current[pendingId];
+        }
+
+        // Vérifier s'il reste des uploads
+        checkRemainingUploads();
+    };
 
     const handleUploadClick = () => {
         fileInputRef.current.click();
@@ -342,14 +377,10 @@ const ImageUploader = () => {
             // Créer des aperçus locaux pour les fichiers sélectionnés
             const newPendingFiles = Array.from(files).map(file => {
                 const id = `pending-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-
-                // Vérifier si c'est un fichier TIFF
                 const fileIsTiff = isTiffFile(file);
-
-                // Obtenir l'URL de preview appropriée selon le type de fichier
                 const previewUrl = getPreviewUrl(file);
 
-                // Enregistrer l'heure de début pour mesurer la durée d'affichage minimale
+                // Enregistrer l'heure de début
                 progressTimersRef.current[id] = {
                     startTime: Date.now()
                 };
@@ -368,14 +399,13 @@ const ImageUploader = () => {
             // Mettre à jour l'état avec les nouveaux fichiers en attente
             setPendingFiles(prevPendingFiles => [...prevPendingFiles, ...newPendingFiles]);
 
-            // Ajouter les fichiers à Uppy après avoir mis à jour l'état
+            // Attendre que l'état soit mis à jour avant d'ajouter les fichiers à Uppy
             setTimeout(() => {
-                // Utiliser setTimeout pour s'assurer que l'état est bien mis à jour
                 newPendingFiles.forEach(pendingFile => {
                     try {
                         uppyRef.current.addFile({
                             name: pendingFile.name,
-                            type: pendingFile.file.type || 'image/tiff', // Assurer un type même pour les fichiers sans type détecté
+                            type: pendingFile.file.type || 'image/tiff',
                             data: pendingFile.file,
                             meta: {
                                 pendingId: pendingFile.id,
@@ -385,6 +415,7 @@ const ImageUploader = () => {
                         });
                     } catch (error) {
                         console.error("Erreur lors de l'ajout du fichier à Uppy:", error);
+
                         // Marquer le fichier comme ayant échoué
                         setPendingFiles(prev => prev.map(pf => {
                             if (pf.id === pendingFile.id) {
@@ -399,29 +430,168 @@ const ImageUploader = () => {
                         }
 
                         // Vérifier s'il reste des uploads en cours
-                        const remainingPendingFiles = prev.filter(pf => !pf.uploadFailed).length - 1;
-                        if (remainingPendingFiles <= 0) {
-                            setIsUploading(false);
-                        }
+                        checkRemainingUploads();
                     }
                 });
             }, 0);
         }
 
-        // Réinitialiser l'input file pour permettre la sélection du même fichier
+        // Réinitialiser l'input pour permettre la sélection du même fichier
         event.target.value = "";
+    };
+
+    // Fonction pour réessayer un upload échoué
+    const handleRetry = (pendingId) => {
+        if (!failedFilesRef.current[pendingId]) {
+            console.error("Failed file data not found for retry");
+            return;
+        }
+
+        // Récupérer les données du fichier échoué
+        const { file, meta } = failedFilesRef.current[pendingId];
+
+        // Vérifier si le fichier existe encore
+        if (!file) {
+            console.error("File data is missing for retry");
+            return;
+        }
+
+        // Réinitialiser l'état d'upload du fichier
+        setPendingFiles(prev => prev.map(pf => {
+            if (pf.id === pendingId) {
+                return {
+                    ...pf,
+                    uploadFailed: false,
+                    retrying: true
+                };
+            }
+            return pf;
+        }));
+
+        // Indiquer qu'un upload est en cours
+        setIsUploading(true);
+
+        // Réinitialiser la progression
+        setProgressInfo(prev => ({
+            ...prev,
+            [pendingId]: {
+                progress: 0,
+                bytesUploaded: 0,
+                bytesTotal: file.size,
+                startTime: Date.now()
+            }
+        }));
+
+        try {
+            // Vérifier si ce pendingId a déjà un fichier dans Uppy
+            // (cela ne devrait pas être le cas après l'erreur, mais vérifions par sécurité)
+            const existingUppyFileId = Object.entries(uppyFileIdsMapRef.current)
+                .find(([key, value]) => key === pendingId);
+
+            if (existingUppyFileId) {
+                // Si le fichier existe encore dans Uppy, le supprimer d'abord
+                try {
+                    uppyRef.current.removeFile(existingUppyFileId[1]);
+                } catch (error) {
+                    console.warn("Erreur lors de la suppression du fichier existant:", error);
+                    // Continuer même si la suppression échoue
+                }
+
+                // Supprimer du mappage
+                delete uppyFileIdsMapRef.current[pendingId];
+            }
+
+            // Créer un nom unique pour éviter les problèmes de duplication
+            const timestamp = Date.now();
+            const randomSuffix = Math.random().toString(36).substr(2, 5);
+            const originalName = pendingToOriginalNameRef.current[pendingId] ||
+                meta.originalName ||
+                file.name;
+
+            // Stocker le nom original pour un affichage cohérent
+            pendingToOriginalNameRef.current[pendingId] = originalName;
+
+            // Créer un nouveau nom pour Uppy (en gardant l'extension)
+            const fileExt = originalName.split('.').pop();
+            const newName = `retry_${timestamp}_${randomSuffix}.${fileExt}`;
+
+            // Créer un nouveau blob si nécessaire pour garantir un fichier unique
+            // Crée une copie du fichier original
+            const fileBlob = new Blob([file], { type: file.type || 'image/tiff' });
+
+            // Ajouter le fichier à Uppy avec le nouveau nom
+            uppyRef.current.addFile({
+                name: newName,
+                type: file.type || 'image/tiff',
+                data: fileBlob,
+                meta: {
+                    ...meta,
+                    pendingId: pendingId,
+                    originalName: originalName,
+                    isRetry: true
+                }
+            });
+
+            // Enregistrer l'heure de début pour la progression
+            progressTimersRef.current[pendingId] = {
+                startTime: Date.now()
+            };
+        } catch (error) {
+            console.error("Erreur lors de la nouvelle tentative d'upload:", error);
+
+            // Remettre le fichier en état d'échec
+            setPendingFiles(prev => prev.map(pf => {
+                if (pf.id === pendingId) {
+                    return {
+                        ...pf,
+                        uploadFailed: true,
+                        retrying: false
+                    };
+                }
+                return pf;
+            }));
+
+            // Nettoyer les infos de progression
+            setProgressInfo(prev => {
+                const newProgress = {...prev};
+                delete newProgress[pendingId];
+                return newProgress;
+            });
+
+            // Vérifier s'il reste des uploads en cours
+            checkRemainingUploads();
+        }
+    };
+
+    // Fonction pour réessayer tous les uploads échoués
+    const handleRetryAll = () => {
+        // Récupérer tous les IDs de fichiers échoués
+        const failedIds = pendingFiles
+            .filter(file => file.uploadFailed)
+            .map(file => file.id);
+
+        // Si aucun fichier échoué, ne rien faire
+        if (failedIds.length === 0) return;
+
+        // Réessayer chaque fichier échoué avec un délai pour éviter les conflits
+        failedIds.forEach((pendingId, index) => {
+            // Ajouter un délai croissant pour chaque fichier
+            setTimeout(() => {
+                handleRetry(pendingId);
+            }, index * 100); // 100ms de délai entre chaque retry
+        });
     };
 
     const handleDragEnd = (result) => {
         if (!result.destination) return;
 
-        // Combiner les images téléchargées et en attente pour le réordonnancement
+        // Combiner les images téléchargées et en attente
         const allItems = [...images, ...pendingFiles];
         const items = Array.from(allItems);
         const [reorderedItem] = items.splice(result.source.index, 1);
         items.splice(result.destination.index, 0, reorderedItem);
 
-        // Mettre à jour les indices après réorganisation et séparer à nouveau les listes
+        // Mettre à jour les indices et séparer les listes
         const updatedItems = items.map((item, index) => ({
             ...item,
             index,
@@ -441,6 +611,9 @@ const ImageUploader = () => {
         // Appel API ou autre logique ici
     };
 
+    // Vérifier s'il y a des fichiers échoués
+    const hasFailedFiles = pendingFiles.some(file => file.uploadFailed);
+
     // Fonction pour rendre la grille d'images
     const renderImageGrid = () => {
         // Combiner les images déjà téléchargées et celles en attente
@@ -449,7 +622,7 @@ const ImageUploader = () => {
         // Trier par index pour maintenir l'ordre
         allImages.sort((a, b) => a.index - b.index);
 
-        // Si aucune image, ne pas rendre le système de drag and drop
+        // Si aucune image, afficher un message
         if (allImages.length === 0) {
             return (
                 <div className="empty-state">
@@ -477,7 +650,7 @@ const ImageUploader = () => {
                             {allImages.map((image, index) => {
                                 // Trouver les informations de progression pour ce fichier
                                 const progress = progressInfo[image.id] || { progress: 0 };
-                                const showProgressCircle = image.isPending && !image.uploadFailed;
+                                const showProgressCircle = image.isPending && !image.uploadFailed && (image.retrying || !('uploadFailed' in image));
 
                                 return (
                                     <Draggable
@@ -504,7 +677,7 @@ const ImageUploader = () => {
                                                     <img
                                                         src={image.url}
                                                         alt={image.name}
-                                                        className="w-full h-full object-cover"
+                                                        className={`w-full h-full object-cover ${image.uploadFailed ? 'opacity-70' : ''}`}
                                                     />
 
                                                     {/* Badge TIFF si nécessaire */}
@@ -529,9 +702,18 @@ const ImageUploader = () => {
                                                     )}
 
                                                     {/* Icône d'échec pour les uploads échoués */}
-                                                    {image.uploadFailed && (
-                                                        <div className="absolute bottom-2 right-2">
-                                                            <FailIcon />
+                                                    {image.uploadFailed && !image.retrying && (
+                                                        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black bg-opacity-30">
+                                                            <div className="mb-2">
+                                                                <FailIcon />
+                                                            </div>
+                                                            <p className="text-white text-xs text-center px-2 mb-4">Upload failed</p>
+                                                            <div className="z-20" onClick={(e) => {
+                                                                e.stopPropagation(); // Empêcher le déclenchement du drag
+                                                                handleRetry(image.id);
+                                                            }}>
+                                                                <RetryButton />
+                                                            </div>
                                                         </div>
                                                     )}
                                                 </div>
@@ -551,11 +733,6 @@ const ImageUploader = () => {
         );
     };
 
-    // Debug pour voir la progression en console
-    useEffect(() => {
-        console.log("Progression des uploads:", progressInfo);
-    }, [progressInfo]);
-
     return (
         <div className="bg-white rounded-lg shadow-lg w-[90%] max-w-[900px] mx-auto p-5 relative">
             <div className="flex justify-between items-center mb-5">
@@ -570,7 +747,7 @@ const ImageUploader = () => {
             {/* Rendu de la grille d'images */}
             {renderImageGrid()}
 
-            <div className="flex justify-center mb-5">
+            <div className="flex justify-center gap-3 mb-5">
                 <input
                     type="file"
                     ref={fileInputRef}
@@ -586,14 +763,28 @@ const ImageUploader = () => {
                 >
                     {isUploading ? "Uploading..." : "Select more images"}
                 </button>
+
+                {/* Bouton de retry pour tous les fichiers échoués */}
+                {hasFailedFiles && (
+                    <button
+                        className="flex items-center justify-center bg-blue-500 border border-blue-600 rounded px-4 py-2 text-sm text-white cursor-pointer transition hover:bg-blue-600"
+                        onClick={handleRetryAll}
+                        disabled={isUploading}
+                    >
+                        <svg className="w-4 h-4 mr-1" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                        </svg>
+                        Retry All Failed
+                    </button>
+                )}
             </div>
 
             <button
                 className="block w-full bg-blue-500 text-white border-0 rounded py-3 text-base font-medium cursor-pointer transition hover:bg-blue-600 disabled:bg-blue-300 disabled:cursor-not-allowed"
                 onClick={handleCreateExperiment}
-                disabled={(images.length === 0 && pendingFiles.length === 0) || isUploading}
+                disabled={(images.length === 0 && pendingFiles.length === 0) || isUploading || hasFailedFiles}
             >
-                {isUploading ? "Uploading..." : "Create Experiment"}
+                {isUploading ? "Uploading..." : hasFailedFiles ? "Retry Failed Uploads to Continue" : "Create Experiment"}
             </button>
         </div>
     );
