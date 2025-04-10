@@ -24,7 +24,7 @@ const FileUploader = ({
       restrictions: { maxFileSize, allowedFileTypes },
       autoProceed: true,
     }).use(Tus, {
-      endpoint: 'https://tusd.tusdemo.net/fdiles',
+      endpoint: 'https://tusd.tusdemo.net/fidles',
       retryDelays: [0, 1000, 3000, 5000],
       chunkSize: 5 * 1024 * 1024,
     });
@@ -236,64 +236,62 @@ const FileUploader = ({
                                               className="w-full h-full object-cover opacity-70"
                                           />
                                       )}
-                                      <div className="absolute inset-0 flex flex-col items-center justify-center bg-black bg-opacity-30">
-                                        {file.status === 'uploading' && (
-                                            <svg
-                                                className="w-12 h-12"
-                                                viewBox={`0 0 ${radius * 2 + 10} ${
-                                                    radius * 2 + 10
-                                                }`}
-                                            >
-                                              <circle
-                                                  cx={radius + 5}
-                                                  cy={radius + 5}
-                                                  r={radius}
-                                                  fill="none"
-                                                  stroke="#e2e8f0"
-                                                  strokeWidth="4"
-                                              />
-                                              <circle
-                                                  cx={radius + 5}
-                                                  cy={radius + 5}
-                                                  r={radius}
-                                                  fill="none"
-                                                  stroke="#3b82f6"
-                                                  strokeWidth="4"
-                                                  strokeDasharray={circumference}
-                                                  strokeDashoffset={strokeDashoffset}
-                                                  transform={`rotate(-90 ${
-                                                      radius + 5
-                                                  } ${radius + 5})`}
-                                                  strokeLinecap="round"
-                                              />
-                                              <text
-                                                  x="50%"
-                                                  y="50%"
-                                                  textAnchor="middle"
-                                                  dy=".3em"
-                                                  fill="white"
-                                                  fontSize="12"
-                                              >
-                                                {Math.round(file.progress)}%
-                                              </text>
-                                            </svg>
-                                        )}
-                                        {file.status === 'error' && (
-                                            <div className="flex flex-col items-center justify-center">
-                                              <XCircle className="w-10 h-10 text-red-500" />
-                                              <button
-                                                  onClick={() =>
-                                                      retryUpload(file.id)
-                                                  }
-                                                  className="mt-2 flex items-center bg-blue-500 text-white px-3 py-1 rounded-md text-sm hover:bg-blue-600"
-                                              >
-                                                <RotateCcw className="w-4 h-4 mr-1" />
-                                                Réessayer
-                                              </button>
-                                            </div>
-                                        )}
-                                      </div>
+                                      {/* Afficher l'overlay uniquement pendant l'upload ou en cas d'erreur */}
+                                      {file.status !== 'success' && (
+                                          <div className="absolute inset-0 flex flex-col items-center justify-center bg-black bg-opacity-30">
+                                            {file.status === 'uploading' && (
+                                                <svg
+                                                    className="w-12 h-12"
+                                                    viewBox={`0 0 ${radius * 2 + 10} ${radius * 2 + 10}`}
+                                                >
+                                                  <circle
+                                                      cx={radius + 5}
+                                                      cy={radius + 5}
+                                                      r={radius}
+                                                      fill="none"
+                                                      stroke="#e2e8f0"
+                                                      strokeWidth="4"
+                                                  />
+                                                  <circle
+                                                      cx={radius + 5}
+                                                      cy={radius + 5}
+                                                      r={radius}
+                                                      fill="none"
+                                                      stroke="#3b82f6"
+                                                      strokeWidth="4"
+                                                      strokeDasharray={circumference}
+                                                      strokeDashoffset={strokeDashoffset}
+                                                      transform={`rotate(-90 ${radius + 5} ${radius + 5})`}
+                                                      strokeLinecap="round"
+                                                  />
+                                                  <text
+                                                      x="50%"
+                                                      y="50%"
+                                                      textAnchor="middle"
+                                                      dy=".3em"
+                                                      fill="white"
+                                                      fontSize="12"
+                                                  >
+                                                    {Math.round(file.progress)}%
+                                                  </text>
+                                                </svg>
+                                            )}
+                                            {file.status === 'error' && (
+                                                <div className="flex flex-col items-center justify-center">
+                                                  <XCircle className="w-10 h-10 text-red-500" />
+                                                  <button
+                                                      onClick={() => retryUpload(file.id)}
+                                                      className="mt-2 flex items-center bg-blue-500 text-white px-3 py-1 rounded-md text-sm hover:bg-blue-600"
+                                                  >
+                                                    <RotateCcw className="w-4 h-4 mr-1" />
+                                                    Réessayer
+                                                  </button>
+                                                </div>
+                                            )}
+                                          </div>
+                                      )}
                                     </div>
+
                                     <div className="p-2 bg-white">
                                       <p
                                           className="text-xs text-gray-600 truncate"
