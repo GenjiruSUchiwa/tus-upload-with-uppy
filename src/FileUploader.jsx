@@ -1,13 +1,13 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+} from 'react';
 import Uppy from '@uppy/core';
 import Tus from '@uppy/tus';
-import { FileInput } from '@uppy/react';
 import { XCircle, RotateCcw } from 'lucide-react';
-import {
-  DragDropContext,
-  Droppable,
-  Draggable,
-} from 'react-beautiful-dnd';
+import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
 
 const FileUploader = ({
                         onUploadSuccess,
@@ -24,12 +24,12 @@ const FileUploader = ({
       restrictions: { maxFileSize, allowedFileTypes },
       autoProceed: true,
     }).use(Tus, {
-      endpoint: 'https://tusd.tusdemo.net/fidles',
+      endpoint: 'http://localhost:5284/api/v1/experiment/images/tus',
       retryDelays: [0, 1000, 3000, 5000],
-      chunkSize: 5 * 1024 * 1024,
     });
 
     uppyInstance.on('file-added', (file) => {
+      // Ici, nous ajoutons une métadonnée custom par défaut (vide ou par défaut)
       setFiles((prevFiles) => [
         ...prevFiles,
         {
@@ -39,6 +39,7 @@ const FileUploader = ({
           progress: 0,
           status: 'uploading',
           error: null,
+          meta: { time: '', name: file.,  }, // Initialisation de la métadonnée
         },
       ]);
     });
@@ -74,9 +75,7 @@ const FileUploader = ({
                   : prevFile
           )
       );
-      setError(
-          `Erreur lors de l'upload de ${file.name}: ${error.message}`
-      );
+      setError(`Erreur lors de l'upload de ${file.name}: ${error.message}`);
     });
 
     setUppy(uppyInstance);
@@ -108,12 +107,7 @@ const FileUploader = ({
         setFiles((prevFiles) =>
             prevFiles.map((prevFile) =>
                 prevFile.id === fileId
-                    ? {
-                      ...prevFile,
-                      status: 'uploading',
-                      progress: 0,
-                      error: null,
-                    }
+                    ? { ...prevFile, status: 'uploading', progress: 0, error: null }
                     : prevFile
             )
         );
@@ -135,18 +129,20 @@ const FileUploader = ({
   const handleSelectFiles = (event) => {
     const selectedFiles = event.target.files;
     for (const file of selectedFiles) {
-      // Ajout manuel du fichier dans Uppy (pour lancer l'upload automatiquement)
+      // On peut aussi définir ici une métadonnée custom par défaut pour le fichier
+      const customMetadata = "MaValeurParDefaut";
       uppy.addFile({
         name: file.name,
         type: file.type,
         data: file,
+        meta: {
+          custom: customMetadata,
+        },
       });
     }
-    // Réinitialiser la sélection pour pouvoir choisir à nouveau le même fichier
     event.target.value = '';
   };
 
-  // Calcul des propriétés du cercle de progression
   const getCircleProps = (progressPercentage) => {
     const radius = 20;
     const circumference = 2 * Math.PI * radius;
@@ -179,7 +175,6 @@ const FileUploader = ({
                 </div>
             )}
 
-            {/* Bouton personnalisé pour sélectionner les fichiers */}
             <div className="mb-4 flex justify-center">
               <input
                   ref={fileInputRef}
@@ -191,13 +186,12 @@ const FileUploader = ({
               />
               <button
                   onClick={() => fileInputRef.current.click()}
-                  className="flex items-center justify-center bg-white border border-gray-300 rounded px-4 py-2 text-sm text-gray-700 cursor-pointer hover:bg-gray-100 disabled:bg-gray-100 disabled:cursor-not-allowed"
+                  className="flex items-center justify-center bg-white border border-gray-300 rounded px-4 py-2 text-sm text-gray-700 cursor-pointer hover:bg-gray-100"
               >
                 Select more images
               </button>
             </div>
 
-            {/* Zone de Drag & Drop */}
             <DragDropContext onDragEnd={onDragEnd}>
               <Droppable droppableId="images" direction="horizontal">
                 {(provided) => (
@@ -207,11 +201,8 @@ const FileUploader = ({
                         {...provided.droppableProps}
                     >
                       {files.map((file, index) => {
-                        const {
-                          radius,
-                          circumference,
-                          strokeDashoffset,
-                        } = getCircleProps(file.progress);
+                        const { radius, circumference, strokeDashoffset } =
+                            getCircleProps(file.progress);
                         return (
                             <Draggable
                                 key={file.id}
@@ -236,13 +227,14 @@ const FileUploader = ({
                                               className="w-full h-full object-cover opacity-70"
                                           />
                                       )}
-                                      {/* Afficher l'overlay uniquement pendant l'upload ou en cas d'erreur */}
                                       {file.status !== 'success' && (
                                           <div className="absolute inset-0 flex flex-col items-center justify-center bg-black bg-opacity-30">
                                             {file.status === 'uploading' && (
                                                 <svg
                                                     className="w-12 h-12"
-                                                    viewBox={`0 0 ${radius * 2 + 10} ${radius * 2 + 10}`}
+                                                    viewBox={`0 0 ${
+                                                        radius * 2 + 10
+                                                    } ${radius * 2 + 10}`}
                                                 >
                                                   <circle
                                                       cx={radius + 5}
@@ -261,7 +253,9 @@ const FileUploader = ({
                                                       strokeWidth="4"
                                                       strokeDasharray={circumference}
                                                       strokeDashoffset={strokeDashoffset}
-                                                      transform={`rotate(-90 ${radius + 5} ${radius + 5})`}
+                                                      transform={`rotate(-90 ${radius + 5} ${
+                                                          radius + 5
+                                                      })`}
                                                       strokeLinecap="round"
                                                   />
                                                   <text
@@ -280,7 +274,9 @@ const FileUploader = ({
                                                 <div className="flex flex-col items-center justify-center">
                                                   <XCircle className="w-10 h-10 text-red-500" />
                                                   <button
-                                                      onClick={() => retryUpload(file.id)}
+                                                      onClick={() =>
+                                                          retryUpload(file.id)
+                                                      }
                                                       className="mt-2 flex items-center bg-blue-500 text-white px-3 py-1 rounded-md text-sm hover:bg-blue-600"
                                                   >
                                                     <RotateCcw className="w-4 h-4 mr-1" />
@@ -291,7 +287,6 @@ const FileUploader = ({
                                           </div>
                                       )}
                                     </div>
-
                                     <div className="p-2 bg-white">
                                       <p
                                           className="text-xs text-gray-600 truncate"
@@ -299,6 +294,39 @@ const FileUploader = ({
                                       >
                                         {file.name}
                                       </p>
+                                      {/* Champ pour la métadonnée custom */}
+                                      <div className="mt-2">
+                                        <label className="block text-xs text-gray-500">
+                                          Meta custom:
+                                        </label>
+                                        <input
+                                            type="text"
+                                            value={file.meta?.custom || ''}
+                                            onChange={(e) => {
+                                              const newMeta = e.target.value;
+                                              // Mise à jour du state local
+                                              setFiles((prevFiles) =>
+                                                  prevFiles.map((f) =>
+                                                      f.id === file.id
+                                                          ? {
+                                                            ...f,
+                                                            meta: {
+                                                              ...f.meta,
+                                                              custom: newMeta,
+                                                            },
+                                                          }
+                                                          : f
+                                                  )
+                                              );
+                                              // Mise à jour dans Uppy pour qu'il envoie ces métadonnées
+                                              uppy.setFileMeta(file.id, {
+                                                custom: newMeta,
+                                              });
+                                            }}
+                                            className="w-full border border-gray-300 rounded p-1 text-xs"
+                                            placeholder="Entrez une valeur"
+                                        />
+                                      </div>
                                       <div className="flex justify-between items-center mt-1">
                                 <span
                                     className={`text-xs ${
@@ -316,9 +344,7 @@ const FileUploader = ({
                                           : 'En cours'}
                                 </span>
                                         <button
-                                            onClick={() =>
-                                                removeFile(file.id)
-                                            }
+                                            onClick={() => removeFile(file.id)}
                                             className="text-gray-500 hover:text-red-500"
                                         >
                                           <XCircle className="w-4 h-4" />
@@ -330,6 +356,7 @@ const FileUploader = ({
                             </Draggable>
                         );
                       })}
+                      {/** Affichage de l'espace vide pour le droppable */}
                       {provided.placeholder}
                     </div>
                 )}
