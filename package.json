@@ -19,6 +19,7 @@
     "@uppy/react": "^4.2.3",
     "@uppy/tus": "^4.2.2",
     "@uppy/webcam": "^4.1.2",
+    "lucide-react": "^0.487.0",
     "react": "^19.0.0",
     "react-beautiful-dnd": "^13.1.1",
     "react-dom": "^19.0.0",
