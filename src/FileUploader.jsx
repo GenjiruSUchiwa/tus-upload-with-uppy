@@ -24,12 +24,15 @@ const FileUploader = ({
       restrictions: { maxFileSize, allowedFileTypes },
       autoProceed: true,
     }).use(Tus, {
-      endpoint: 'http://localhost:5284/api/v1/experiment/images/tus',
+      endpoint: 'http://localhost:5284/api/v1/experiments/68dd40ef-5572-4c8b-8267-28eca17ccec0/images',
+      headers: {
+        "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI3ZTQ0NGRmMi1mYWM1LTRhYTEtYmZiZC03YWNmYjIzMjVjOGMiLCJpYXQiOjE3NDQyMjE3MDIzOTksImh0dHA6Ly9zY2hlbWFzLnhtbHNvYXAub3JnL3dzLzIwMDUvMDUvaWRlbnRpdHkvY2xhaW1zL25hbWVpZGVudGlmaWVyIjoiN2U0NDRkZjItZmFjNS00YWExLWJmYmQtN2FjZmIyMzI1YzhjIiwiaHR0cDovL3NjaGVtYXMueG1sc29hcC5vcmcvd3MvMjAwNS8wNS9pZGVudGl0eS9jbGFpbXMvZW1haWxhZGRyZXNzIjoibWJhc3NpLmFyaXN0aWRlMEBnbWFpbC5jb20iLCJodHRwOi8vc2NoZW1hcy5taWNyb3NvZnQuY29tL3dzLzIwMDgvMDYvaWRlbnRpdHkvY2xhaW1zL3JvbGUiOiJDbGllbnQiLCJleHAiOjE3NDY4MTM3MDIsImlzcyI6Imh0dHBzOi8vbG9jYWxob3N0OjcyMzYiLCJhdWQiOiJodHRwczovL2xvY2FsaG9zdDo3MjM2In0.9S93touyUGerv0M6LzYAt1SpxzL4g9yt95f9LDAWJUE"
+      },
       retryDelays: [0, 1000, 3000, 5000],
     });
 
     uppyInstance.on('file-added', (file) => {
-      // Ici, nous ajoutons une métadonnée custom par défaut (vide ou par défaut)
+
       setFiles((prevFiles) => [
         ...prevFiles,
         {
@@ -39,8 +42,7 @@ const FileUploader = ({
           progress: 0,
           status: 'uploading',
           error: null,
-          meta: { time: '', name: file.,  }, // Initialisation de la métadonnée
-        },
+          },
       ]);
     });
 
@@ -129,14 +131,17 @@ const FileUploader = ({
   const handleSelectFiles = (event) => {
     const selectedFiles = event.target.files;
     for (const file of selectedFiles) {
-      // On peut aussi définir ici une métadonnée custom par défaut pour le fichier
-      const customMetadata = "MaValeurParDefaut";
       uppy.addFile({
         name: file.name,
         type: file.type,
         data: file,
         meta: {
-          custom: customMetadata,
+          contentType: file.type,
+          name: file.name,
+          experimentId: '68dd40ef-5572-4c8b-8267-28eca17ccec0',
+          time: '120',
+          index: '1'
+
         },
       });
     }
