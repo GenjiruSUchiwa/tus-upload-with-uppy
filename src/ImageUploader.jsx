@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import Uppy from "@uppy/core";
 import Tus from "@uppy/tus";
 import { DragDropContext, Droppable, Draggable } from "react-beautiful-dnd";
@@ -7,68 +7,153 @@ const ImageUploader = () => {
     const [images, setImages] = useState([]);
     const [pendingFiles, setPendingFiles] = useState([]);
     const [isUploading, setIsUploading] = useState(false);
+    const [progressInfo, setProgressInfo] = useState({});
     const fileInputRef = useRef(null);
     const uppyRef = useRef(null);
 
-    // Initialisation d'Uppy
-    React.useEffect(() => {
-        uppyRef.current = new Uppy({
-            id: "uppy",
-            autoProceed: false, // Désactiver l'upload automatique
-            allowMultipleUploadBatches: true,
-            restrictions: {
-                maxFileSize: 5000000, // 5MB
-                allowedFileTypes: ["image/*"],
-            },
-        })
-            .use(Tus, {
-                endpoint: "https://tusd.tusdemo.net/files/", // Remplacer par votre endpoint tus
-                retryDelays: [0, 1000, 3000, 5000],
+    // Chemin vers l'image de preview TIFF statique
+    const TIFF_PREVIEW_PATH = "/tif-preview.png";
+
+    // Fonction pour vérifier si un fichier est au format TIFF
+    const isTiffFile = (file) => {
+        return file.type === 'image/tiff' ||
+            file.name.toLowerCase().endsWith('.tif') ||
+            file.name.toLowerCase().endsWith('.tiff');
+    };
+
+    // Fonction pour générer une URL de preview selon le type de fichier
+    const getPreviewUrl = (file) => {
+        if (isTiffFile(file)) {
+            // Pour les TIFF, utiliser l'image statique
+            return TIFF_PREVIEW_PATH;
+        }
+        // Pour les autres formats, utiliser l'URL de l'objet
+        return URL.createObjectURL(file);
+    };
+
+    // Initialisation d'Uppy - une seule fois au montage du composant
+    useEffect(() => {
+        // Initialiser Uppy seulement s'il n'existe pas encore
+        if (!uppyRef.current) {
+            uppyRef.current = new Uppy({
+                id: "uppy",
+                autoProceed: true,
+                allowMultipleUploadBatches: true,
+                restrictions: {
+                    // Inclure explicitement 'image/tiff' dans les types autorisés
+                    allowedFileTypes: ["image/*", ".tif", ".tiff", "image/tiff"],
+                },
             })
-            .on("upload-success", (file, response) => {
-                const imageUrl = response.uploadURL || URL.createObjectURL(file.data);
+                .use(Tus, {
+                    endpoint: "https://tusd.tusdemo.net/files/", // Remplacer par votre endpoint tus
+                    retryDelays: [0, 1000, 3000, 5000],
+                    chunkSize: 2 * 1024 * 1024,
+                });
 
-                // Trouver l'index correspondant au fichier en attente pour préserver l'ordre
-                const matchingPendingFile = pendingFiles.find(pf =>
-                    pf.name === file.name &&
-                    pf.file.size === file.data.size
-                );
+            // Configuration des événements Uppy une seule fois
+            uppyRef.current
+                .on('upload-progress', (file, progress) => {
+                    const { bytesUploaded, bytesTotal } = progress;
+                    const percentage = Math.floor((bytesUploaded / bytesTotal) * 100);
 
-                const index = matchingPendingFile ? matchingPendingFile.index : images.length;
+                    setProgressInfo(prev => ({
+                        ...prev,
+                        [file.id]: {
+                            progress: percentage,
+                            bytesUploaded,
+                            bytesTotal
+                        }
+                    }));
+                })
+                .on("upload-success", (file, response) => {
+                    // Vérifier si c'est un fichier TIFF
+                    const fileIsTiff = isTiffFile(file);
 
-                setImages((prevImages) => [
-                    ...prevImages,
-                    {
-                        id: file.id,
-                        name: file.name,
-                        url: imageUrl,
-                        index,
-                    },
-                ]);
+                    // URL de stockage (URL réelle du fichier téléchargé)
+                    const storageUrl = response.uploadURL || URL.createObjectURL(file.data);
 
-                // Supprimer le fichier en attente correspondant
-                if (matchingPendingFile) {
+                    // URL d'affichage (preview)
+                    const displayUrl = fileIsTiff ? TIFF_PREVIEW_PATH : storageUrl;
+
+                    setImages((prevImages) => {
+                        // Trouver l'index correspondant au fichier en attente pour préserver l'ordre
+                        const matchingPendingFile = pendingFiles.find(pf =>
+                            pf.name === file.name &&
+                            pf.file.size === file.data.size
+                        );
+
+                        const index = matchingPendingFile ? matchingPendingFile.index : prevImages.length;
+
+                        return [
+                            ...prevImages,
+                            {
+                                id: file.id,
+                                name: file.name,
+                                url: displayUrl,           // URL pour l'affichage (preview)
+                                storageUrl: storageUrl,    // URL réelle pour le stockage/téléchargement
+                                isTiff: fileIsTiff,
+                                index,
+                            },
+                        ];
+                    });
+
+                    // Supprimer le fichier en attente correspondant
                     setPendingFiles(prev =>
-                        prev.filter(pf => pf.id !== matchingPendingFile.id)
+                        prev.filter(pf => !(pf.name === file.name && pf.file.size === file.data.size))
                     );
-                }
-            })
-            .on("upload-error", (file, error) => {
-                console.error("Upload error:", error);
-                setIsUploading(false);
-            })
-            .on("complete", () => {
-                console.log("Complete");
-                setIsUploading(false);
-                setPendingFiles([]);
-            });
 
+                    // Nettoyer les infos de progression
+                    setProgressInfo(prev => {
+                        const newProgress = {...prev};
+                        delete newProgress[file.id];
+                        return newProgress;
+                    });
+                })
+                .on("upload-error", (file, error) => {
+                    console.error("Upload error:", error);
+                    setIsUploading(false);
+
+                    // Marquer le fichier comme ayant échoué
+                    setPendingFiles(prev => prev.map(pf => {
+                        if (pf.name === file.name) {
+                            return {...pf, uploadFailed: true};
+                        }
+                        return pf;
+                    }));
+
+                    // Nettoyer les infos de progression
+                    setProgressInfo(prev => {
+                        const newProgress = {...prev};
+                        delete newProgress[file.id];
+                        return newProgress;
+                    });
+                })
+                .on("complete", (result) => {
+                    if (result.failed.length === 0 && result.successful.length > 0) {
+                        // Tous les uploads ont réussi
+                        setIsUploading(false);
+                    } else if (result.failed.length > 0) {
+                        // Certains uploads ont échoué
+                        setIsUploading(false);
+                    }
+                });
+        }
+
+        // Nettoyer Uppy et les URL des objets lors du démontage
         return () => {
             if (uppyRef.current) {
                 uppyRef.current.destroy();
+                uppyRef.current = null;
             }
+
+            // Nettoyer les URL d'objets pour éviter les fuites de mémoire
+            pendingFiles.forEach(file => {
+                if (file.url && file.url.startsWith('blob:')) {
+                    URL.revokeObjectURL(file.url);
+                }
+            });
         };
-    }, [pendingFiles]);
+    }, []); // Dépendance vide - s'exécute uniquement au montage et au démontage
 
     const handleUploadClick = () => {
         fileInputRef.current.click();
@@ -76,22 +161,68 @@ const ImageUploader = () => {
 
     const handleFileChange = (event) => {
         const files = event.target.files;
-        if (files.length > 0) {
-            // Créer des aperçus locaux pour les fichiers sélectionnés
-            const newPendingFiles = Array.from(files).map(file => ({
-                id: `pending-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-                name: file.name,
-                url: URL.createObjectURL(file),
-                file: file,
-                isPending: true,
-                index: pendingFiles.length + images.length,
-            }));
 
+        if (files.length > 0) {
+            setIsUploading(true);
+
+            // Créer des aperçus locaux pour les fichiers sélectionnés
+            const newPendingFiles = Array.from(files).map(file => {
+                const id = `pending-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+                // Vérifier si c'est un fichier TIFF
+                const fileIsTiff = isTiffFile(file);
+
+                // Obtenir l'URL de preview appropriée selon le type de fichier
+                const previewUrl = getPreviewUrl(file);
+
+                return {
+                    id: id,
+                    name: file.name,
+                    url: previewUrl,
+                    file: file,
+                    isPending: true,
+                    isTiff: fileIsTiff,
+                    index: pendingFiles.length + images.length,
+                };
+            });
+
+            // Mettre à jour l'état avec les nouveaux fichiers en attente
             setPendingFiles(prevPendingFiles => [...prevPendingFiles, ...newPendingFiles]);
+
+            // Ajouter les fichiers à Uppy après avoir mis à jour l'état
+            setTimeout(() => {
+                // Utiliser setTimeout pour s'assurer que l'état est bien mis à jour
+                newPendingFiles.forEach(pendingFile => {
+                    try {
+                        uppyRef.current.addFile({
+                            name: pendingFile.name,
+                            type: pendingFile.file.type || 'image/tiff', // Assurer un type même pour les fichiers sans type détecté
+                            data: pendingFile.file,
+                            meta: {
+                                pendingId: pendingFile.id,
+                                index: pendingFile.index,
+                                isTiff: pendingFile.isTiff
+                            }
+                        });
+                    } catch (error) {
+                        console.error("Erreur lors de l'ajout du fichier à Uppy:", error);
+                        // Marquer le fichier comme ayant échoué
+                        setPendingFiles(prev => prev.map(pf => {
+                            if (pf.id === pendingFile.id) {
+                                return { ...pf, uploadFailed: true };
+                            }
+                            return pf;
+                        }));
+                    }
+                });
+            }, 0);
         }
+
+        // Réinitialiser l'input file pour permettre la sélection du même fichier
+        event.target.value = "";
     };
 
-    const handleDragEnd = useCallback((result) => {
+    const handleDragEnd = (result) => {
         if (!result.destination) return;
 
         // Combiner les images téléchargées et en attente pour le réordonnancement
@@ -112,39 +243,18 @@ const ImageUploader = () => {
 
         setImages(updatedImages);
         setPendingFiles(updatedPendingFiles);
-    }, [images, pendingFiles]);
+    };
 
     const handleCreateExperiment = () => {
-        // Uploader tous les fichiers en attente
-        if (pendingFiles.length > 0) {
-            setIsUploading(true);
-
-            // Ajouter tous les fichiers en attente à Uppy
-            pendingFiles.forEach(pendingFile => {
-                uppyRef.current.addFile({
-                    name: pendingFile.name,
-                    type: pendingFile.file.type,
-                    data: pendingFile.file,
-                    meta: {
-                        pendingId: pendingFile.id, // Stocker l'ID du fichier en attente pour le retrouver
-                        index: pendingFile.index   // Préserver l'index pour l'ordre
-                    }
-                });
-            });
-
-            // Démarrer l'upload
-            uppyRef.current.upload();
-        } else {
-            // Logique pour créer l'expérience avec les images déjà ordonnées
-            console.log("Images ordonnées:", images);
-            // Appel API ou autre logique ici
-        }
+        // S'il n'y a plus de fichiers en attente, créer l'expérience
+        console.log("Images ordonnées:", images);
+        // Appel API ou autre logique ici
     };
 
     // Fonction pour rendre la grille d'images
     const renderImageGrid = () => {
         // Combiner les images déjà téléchargées et celles en attente
-        const allImages = [...pendingFiles];
+        const allImages = [...images, ...pendingFiles];
 
         // Trier par index pour maintenir l'ordre
         allImages.sort((a, b) => a.index - b.index);
@@ -174,42 +284,76 @@ const ImageUploader = () => {
                             {...provided.droppableProps}
                             ref={provided.innerRef}
                         >
-                            {allImages.map((image, index) => (
-                                <Draggable
-                                    key={String(image.id)}
-                                    draggableId={String(image.id)}
-                                    index={index}
-                                    isDragDisabled={isUploading}
-                                    disableInteractiveElementBlocking={true}
-                                >
-                                    {(provided, snapshot) => (
-                                        <div
-                                            className={`relative rounded-lg overflow-hidden bg-gray-100 shadow cursor-grab flex flex-col ${snapshot.isDragging ? 'shadow-md' : 'shadow-sm'}`}
-                                            ref={provided.innerRef}
-                                            {...provided.draggableProps}
-                                            {...provided.dragHandleProps}
-                                            style={{
-                                                ...provided.draggableProps.style
-                                            }}
-                                        >
-                                            <div className="absolute top-1 left-1 bg-black bg-opacity-60 text-white text-xs font-bold px-1.5 py-0.5 rounded z-10">
-                                                {String(index + 1).padStart(2, '0')}
-                                            </div>
-                                            <div className="w-full h-[100px] overflow-hidden">
-                                                <img
-                                                    src={image.url}
-                                                    alt={image.name}
-                                                    className="w-full h-full object-cover"
-                                                />
+                            {allImages.map((image, index) => {
+                                // Trouver les informations de progression pour ce fichier
+                                const progress = progressInfo[image.id] || null;
+                                const isUploading = progress && progress.progress < 100;
 
+                                return (
+                                    <Draggable
+                                        key={String(image.id)}
+                                        draggableId={String(image.id)}
+                                        index={index}
+                                        isDragDisabled={isUploading}
+                                        disableInteractiveElementBlocking={true}
+                                    >
+                                        {(provided, snapshot) => (
+                                            <div
+                                                className={`relative rounded-lg overflow-hidden bg-gray-100 shadow cursor-grab flex flex-col ${snapshot.isDragging ? 'shadow-md' : 'shadow-sm'}`}
+                                                ref={provided.innerRef}
+                                                {...provided.draggableProps}
+                                                {...provided.dragHandleProps}
+                                                style={{
+                                                    ...provided.draggableProps.style
+                                                }}
+                                            >
+                                                <div className="absolute top-1 left-1 bg-black bg-opacity-60 text-white text-xs font-bold px-1.5 py-0.5 rounded z-10">
+                                                    {String(index + 1).padStart(2, '0')}
+                                                </div>
+                                                <div className="w-full h-[100px] overflow-hidden relative">
+                                                    <img
+                                                        src={image.url}
+                                                        alt={image.name}
+                                                        className="w-full h-full object-cover"
+                                                    />
+
+                                                    {/* Badge TIFF si nécessaire */}
+                                                    {image.isTiff && (
+                                                        <div className="absolute top-1 right-1 bg-yellow-500 text-white text-xs font-bold px-1.5 py-0.5 rounded">
+                                                            TIFF
+                                                        </div>
+                                                    )}
+
+                                                    {image.isPending && !isUploading && !image.uploadFailed && (
+                                                        <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 text-white">
+                                                            Pending
+                                                        </div>
+                                                    )}
+                                                    {image.uploadFailed && (
+                                                        <div className="absolute inset-0 flex items-center justify-center bg-red-500 bg-opacity-50 text-white">
+                                                            Failed
+                                                        </div>
+                                                    )}
+                                                    {isUploading && (
+                                                        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black bg-opacity-50 text-white">
+                                                            <div className="text-xs mb-1">{progress?.progress || 0}%</div>
+                                                            <div className="w-4/5 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                                                                <div
+                                                                    className="h-full bg-blue-500 rounded-full"
+                                                                    style={{ width: `${progress?.progress || 0}%` }}
+                                                                />
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                                <div className="text-xs text-gray-600 p-1 whitespace-nowrap overflow-hidden text-ellipsis bg-gray-100">
+                                                    {image.name}
+                                                </div>
                                             </div>
-                                            <div className="text-xs text-gray-600 p-1 whitespace-nowrap overflow-hidden text-ellipsis bg-gray-100">
-                                                {image.name}
-                                            </div>
-                                        </div>
-                                    )}
-                                </Draggable>
-                            ))}
+                                        )}
+                                    </Draggable>
+                                );
+                            })}
                             {provided.placeholder}
                         </div>
                     )}
@@ -239,7 +383,7 @@ const ImageUploader = () => {
                     className="hidden"
                     onChange={handleFileChange}
                     multiple
-                    accept="image/*"
+                    accept="image/*,.tif,.tiff"
                 />
                 <button
                     className="flex items-center justify-center bg-white border border-gray-300 rounded px-4 py-2 text-sm text-gray-700 cursor-pointer transition hover:bg-gray-100 disabled:bg-gray-100 disabled:text-gray-500 disabled:cursor-not-allowed before:content-['↑'] before:mr-2"
@@ -255,7 +399,7 @@ const ImageUploader = () => {
                 onClick={handleCreateExperiment}
                 disabled={(images.length === 0 && pendingFiles.length === 0) || isUploading}
             >
-                {isUploading ? "Uploading..." : `Create Experiment${pendingFiles.length > 0 ? " & Upload Images" : ""}`}
+                {isUploading ? "Uploading..." : "Create Experiment"}
             </button>
         </div>
     );
